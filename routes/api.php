@@ -1,4 +1,5 @@
 <?php
+
 use App\Http\Controllers\API\TableController;
 use App\Http\Controllers\API\ReservationController;
 use App\Http\Controllers\API\MenuController;
@@ -7,6 +8,7 @@ use App\Http\Controllers\API\BillingController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
+// === PUBLIC ROUTES — EVERYONE SEES THESE ===
 Route::post('/login', function(Request $request) {
     $credentials = $request->validate([
         'email' => 'required|email',
@@ -30,7 +32,7 @@ Route::post('/register', function(Request $request) {
     $user = \App\Models\User::create([
         'name' => $validated['name'],
         'email' => $validated['email'],
-        'password' => bcrypt($validated['password']), // ✅ This ensures Bcrypt is used
+        'password' => bcrypt($validated['password']),
         'role' => 'customer',
     ]);
     
@@ -38,15 +40,18 @@ Route::post('/register', function(Request $request) {
     return response()->json(['user' => $user, 'token' => $token], 201);
 });
 
+// ✅ THESE MUST BE PUBLIC — frontend loads before login
+Route::get('/menu', [MenuController::class, 'index']);
+Route::get('/tables', [TableController::class, 'index']);
 
+// === PROTECTED ROUTES — NEED LOGIN ===
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', function (Request $req) { return $req->user(); });
-    Route::get('/tables', [TableController::class, 'index']);
+    
     Route::patch('/tables/{table}/status', [TableController::class, 'updateStatus']);
     Route::get('/reservations', [ReservationController::class, 'index']);
     Route::post('/reservations', [ReservationController::class, 'store']);
     Route::patch('/reservations/{reservation}', [ReservationController::class, 'update']);
-    Route::get('/menu', [MenuController::class, 'index']);
     Route::post('/menu', [MenuController::class, 'store']);
     Route::patch('/menu/{menuItem}', [MenuController::class, 'update']);
     Route::get('/orders', [OrderController::class, 'index']);

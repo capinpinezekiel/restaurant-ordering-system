@@ -37,14 +37,18 @@ class ReservationController extends Controller {
         return response()->json($reservation, 201);
     }
 
-    public function update(Request $request, Reservation $reservation) {
-        $request->validate(['status' => 'required|in:pending,confirmed,cancelled,completed']);
-        $reservation->update(['status' => $request->status]);
-        
-        if ($request->status === 'cancelled' || $request->status === 'completed') {
+       public function update(Request $request, Reservation $reservation)
+    {
+        $validated = $request->validate([
+            'status' => 'required|in:pending,confirmed,cancelled,completed',
+        ]);
+
+        $reservation->update($validated);
+
+        if ($validated['status'] === 'cancelled' || $validated['status'] === 'completed') {
             $reservation->table->update(['status' => 'free']);
         }
-        
-        return response()->json($reservation);
+
+        return response()->json(['message' => 'Status updated', 'reservation' => $reservation]);
     }
 }
