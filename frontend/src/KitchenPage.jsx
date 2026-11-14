@@ -1,90 +1,123 @@
 import { useState, useEffect } from 'react';
 import api from './api';
 
-const statusColors = {
-    preparing: '#fff3cd',
-    ready: '#d1e7dd',
-    served: '#cfe2ff',
-    paid: '#e9ecef'
+// Status track: how many of the four steps are lit for each status
+const progressConfig = {
+  pending: { steps: 1, label: 'Pending' },
+  preparing: { steps: 2, label: 'Preparing' },
+  ready: { steps: 3, label: 'Ready to serve' },
+  served: { steps: 4, label: 'Served' },
+};
+
+const getProgressInfo = (status) => progressConfig[status] || { steps: 0, label: status };
+
+const minutesAgo = (iso) => {
+  if (!iso) return null;
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (Number.isNaN(mins)) return null;
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  return `${Math.floor(mins / 60)} h ${mins % 60} min ago`;
 };
 
 export default function KitchenPage() {
-    const [orders, setOrders] = useState([]);
+  const [orders, setOrders] = useState([]);
 
-    const fetchOrders = async () => {
-        try {
-            const res = await api.get('/orders');
-            console.log('Orders fetched:', res.data);
-            setOrders(res.data.filter(o => o.status !== 'paid'));
-        } catch (err) {
-            console.error('Failed to fetch orders:', err.response?.data || err.message);
-        }
-    };
+  const fetchOrders = async () => {
+    try {
+      const res = await api.get('/orders');
+      setOrders(res.data.filter(o => o.status !== 'paid'));
+    } catch (err) {
+      console.error('Fetch error:', err);
+    }
+  };
 
-    useEffect(() => {
-        fetchOrders();
-        const interval = setInterval(fetchOrders, 5000);
-        return () => clearInterval(interval);
-    }, []);
+  useEffect(() => {
+    fetchOrders();
+    const interval = setInterval(fetchOrders, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
-    const updateStatus = async (orderId, newStatus) => {
-        await api.patch(`/orders/${orderId}/status`, { status: newStatus });
-        fetchOrders();
-    };
+  const updateStatus = async (id, status) => {
+    try {
+      await api.patch(`/orders/${id}/status`, { status });
+      fetchOrders();
+    } catch (err) {
+      alert('Failed to update status');
+    }
+  };
 
-    return (
-        <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-            <h2>🍳 Kitchen Display — Active Orders</h2>
-            <p style={{ color: '#666' }}>Auto-refreshes every 5 seconds</p>
+  return (
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">Kitchen tickets</h1>
+        <p className="page-lede">Active orders, refreshed every 10 seconds.</p>
+      </div>
 
-            {orders.length === 0 ? (
-                <p style={{ fontSize: '18px', color: '#666', textAlign: 'center', marginTop: '50px' }}>
-                    No active orders — all caught up! ✅
-                </p>
-            ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '15px' }}>
-                    {orders.map(order => (
-                        <div key={order.id} style={{
-                            padding: '15px',
-                            borderRadius: '8px',
-                            backgroundColor: statusColors[order.status],
-                            border: '1px solid #ddd'
-                        }}>
-                            <h4>Order #{order.id} — Table {order.table?.table_number}</h4>
-                            <p style={{ margin: '5px 0', fontWeight: 'bold' }}>
-                                Status: {order.status.toUpperCase()}
-                            </p>
-                            <ul style={{ margin: '10px 0', paddingLeft: '20px' }}>
-                                {order.orderItems?.map((item, idx) => (
-                                    <li key={idx}>
-                                        {item.quantity}× {item.menuItem?.name}
-                                        {item.special_requests && <small style={{ color: '#d63384' }}> ({item.special_requests})</small>}
-                                    </li>
-                                ))}
-                            </ul>
-                            <p style={{ fontWeight: 'bold' }}>Total: ₱{order.total_amount}</p>
-
-                            <div style={{ marginTop: '10px', display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-                                {order.status === 'preparing' && (
-                                    <button onClick={() => updateStatus(order.id, 'ready')}
-                                        style={{ padding: '6px 12px', background: '#198754', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                                        Mark Ready
-                                    </button>
-                                )}
-                                {order.status === 'ready' && (
-                                    <button onClick={() => updateStatus(order.id, 'served')}
-                                        style={{ padding: '6px 12px', background: '#0d6efd', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                                        Mark Served
-                                    </button>
-                                )}
-                                {order.status === 'served' && (
-                                    <span style={{ color: '#666', fontSize: '13px' }}>Awaiting payment...</span>
-                                )}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
+      {orders.length === 0 ? (
+        <div className="empty">
+          <strong>The rail is clear</strong>
+          New orders will show up here as soon as they are placed.
         </div>
-    );
+      ) : (
+        <div className="rail">
+          {orders.map(order => {
+            const progress = getProgressInfo(order.status);
+            const placed = minutesAgo(order.created_at);
+
+            return (
+              <article key={order.id} className={`kt ${order.status}`}>
+                <div className="kt-head">
+                  <div className="kt-table">Table {order.table?.table_number}</div>
+                  <div className="kt-meta">
+                    <div>Order #{order.id}</div>
+                    {placed && <div>{placed}</div>}
+                  </div>
+                </div>
+
+                <div className="kt-steps" aria-hidden="true">
+                  {[1, 2, 3, 4].map(n => (
+                    <div key={n} className={`kt-step ${n <= progress.steps ? 'on' : ''}`} />
+                  ))}
+                </div>
+                <div className="kt-status">{progress.label}</div>
+
+                <ul className="kt-items">
+                  {order.order_items?.map(item => (
+                    <li key={item.id}>
+                      <span className="kt-qty">{item.quantity}×</span>
+                      <span>
+                        {item.menu_item?.name}
+                        {item.special_requests && (
+                          <span className="kt-note">Note: {item.special_requests}</span>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="kt-actions">
+                  {order.status === 'pending' && (
+                    <button className="btn btn-primary btn-lg btn-block" onClick={() => updateStatus(order.id, 'preparing')}>
+                      Start preparing
+                    </button>
+                  )}
+                  {order.status === 'preparing' && (
+                    <button className="btn btn-primary btn-lg btn-block" onClick={() => updateStatus(order.id, 'ready')}>
+                      Mark as ready
+                    </button>
+                  )}
+                  {order.status === 'ready' && (
+                    <button className="btn btn-brass btn-lg btn-block" onClick={() => updateStatus(order.id, 'served')}>
+                      Mark as served
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }

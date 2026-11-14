@@ -8,16 +8,25 @@ export default function ReservationPage({ user }) {
     table_id: '',
     reserved_date_time: '',
     guest_count: 1,
-    notes: ''
+    notes: '',
   });
+  const [selectedTableInfo, setSelectedTableInfo] = useState(null);
   const [message, setMessage] = useState('');
+  const [messageType, setMessageType] = useState('success');
+  const [loading, setLoading] = useState(false);
+
+  const getMinDateTime = () => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    return now.toISOString().slice(0, 16);
+  };
 
   const fetchTables = async () => {
     try {
       const res = await api.get('/tables');
       setTables(res.data);
     } catch (err) {
-      console.error('Failed to load tables');
+      showMessage('Failed to load tables', 'error');
     }
   };
 
@@ -30,131 +39,216 @@ export default function ReservationPage({ user }) {
     }
   };
 
+  const showMessage = (text, type = 'success') => {
+    setMessage(text);
+    setMessageType(type);
+    setTimeout(() => setMessage(''), 4000);
+  };
+
   useEffect(() => {
     fetchTables();
     fetchReservations();
   }, []);
 
+  const handleTableChange = (e) => {
+    const tableId = e.target.value;
+    const table = tables.find(t => t.id === parseInt(tableId));
+    setSelectedTableInfo(table || null);
+    setForm({ ...form, table_id: tableId, guest_count: 1 });
+  };
+
+  const handleGuestCountChange = (e) => {
+    let value = parseInt(e.target.value) || 1;
+
+    if (selectedTableInfo) {
+      if (value < 1) value = 1;
+      if (value > selectedTableInfo.capacity) {
+        showMessage(`This table seats ${selectedTableInfo.capacity} at most`, 'error');
+        value = selectedTableInfo.capacity;
+      }
+    }
+
+    setForm({ ...form, guest_count: value });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage('');
+    setLoading(true);
+
+    if (!form.table_id) {
+      showMessage('Please select a table', 'error');
+      setLoading(false);
+      return;
+    }
+    if (!form.reserved_date_time) {
+      showMessage('Please select a date and time', 'error');
+      setLoading(false);
+      return;
+    }
+    if (new Date(form.reserved_date_time) < new Date()) {
+      showMessage('You can’t reserve a date or time in the past', 'error');
+      setLoading(false);
+      return;
+    }
+    if (selectedTableInfo && form.guest_count > selectedTableInfo.capacity) {
+      showMessage(`This table seats ${selectedTableInfo.capacity} at most`, 'error');
+      setLoading(false);
+      return;
+    }
+
     try {
       await api.post('/reservations', form);
-      setMessage('✅ Reservation successful!');
+      showMessage('Reservation submitted');
       setForm({ table_id: '', reserved_date_time: '', guest_count: 1, notes: '' });
-      fetchTables();
+      setSelectedTableInfo(null);
       fetchReservations();
+      fetchTables();
     } catch (err) {
-      setMessage('❌ Error: ' + (err.response?.data?.message || 'Could not reserve table'));
+      const errorMsg = err.response?.data?.message || 'Failed to create reservation';
+      showMessage(errorMsg, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const updateReservationStatus = async (reservationId, newStatus) => {
-    try {
-      await api.patch(`/reservations/${reservationId}`, { status: newStatus });
-      fetchTables();
-      fetchReservations();
-    } catch (err) {
-      alert('Failed to update status');
-    }
-  };
+  const statusBadge = (status) =>
+    status === 'confirmed' ? 'badge-success' : status === 'cancelled' ? 'badge-error' : 'badge-warn';
 
   return (
-    <div style={{ padding: '20px', maxWidth: '900px', margin: '0 auto' }}>
-      <h2 style={{ color: '#1a202c', marginBottom: '24px' }}>Table Reservation</h2>
+    <div className="page page-narrow">
+      <div className="page-head">
+        <h1 className="page-title">Reserve a table</h1>
+        <p className="page-lede">Pick a free table in the dining room, then tell us when you are coming.</p>
+      </div>
 
-      <div style={{ marginBottom: '30px' }}>
-        <h3 style={{ color: '#2d3748', marginBottom: '16px' }}>All Tables</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
-          {tables.map(table => (
-            <div key={table.id} style={{
-              padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0',
-              backgroundColor: table.status === 'free' ? '#f0fdf4' : table.status === 'reserved' ? '#fffbeb' : '#fef2f2'
-            }}>
-              <strong style={{ color: '#1a202c', fontSize: '16px' }}>Table {table.table_number}</strong>
-              <p style={{ color: '#4a5568', margin: '6px 0' }}>Capacity: {table.capacity} guests</p>
-              <p style={{ margin: '8px 0 0 0', fontWeight: 600, fontSize: '14px', color:
-                table.status === 'free' ? '#166534' :
-                table.status === 'reserved' ? '#92400e' : '#991b1b'
-              }}>
-                {table.status === 'free' ? '✅ Free' : table.status === 'reserved' ? '🔒 Reserved' : '🍽️ Occupied'}
-              </p>
+      {/* ─── DINING ROOM ─── */}
+      <h2 className="section-title">The dining room</h2>
+      <div className="floor">
+        {tables.map(table => {
+          const free = table.status === 'free';
+          const selected = String(form.table_id) === String(table.id);
+          return (
+            <button
+              key={table.id}
+              type="button"
+              className={`tile ${free ? 'free' : 'taken'} ${selected ? 'selected' : ''}`}
+              disabled={!free}
+              aria-pressed={selected}
+              onClick={() => handleTableChange({ target: { value: String(table.id) } })}
+            >
+              <span className="tile-num">{table.table_number}</span>
+              <span className="seats" aria-hidden="true">
+                {Array.from({ length: Math.min(Number(table.capacity) || 0, 12) }).map((_, i) => (
+                  <span key={i} className="seat" />
+                ))}
+              </span>
+              <span className="tile-meta">Seats {table.capacity}</span>
+              <span className="tile-status">{free ? 'Free' : 'Reserved'}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {message && (
+        <div className={`alert alert-${messageType}`} role="status">{message}</div>
+      )}
+
+      {/* ─── FORM ─── */}
+      <form className="card" onSubmit={handleSubmit} style={{ marginBottom: 40 }}>
+        <h2 className="section-title" style={{ border: 0, paddingBottom: 0, marginBottom: 20 }}>Your reservation</h2>
+
+        <div className="field">
+          <label className="label" htmlFor="table_id">Table *</label>
+          <select id="table_id" name="table_id" className="input" value={form.table_id} onChange={handleTableChange} required>
+            <option value="">Choose a table</option>
+            {tables.map(table => (
+              <option key={table.id} value={table.id}>
+                Table {table.table_number}, seats {table.capacity}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {selectedTableInfo && (
+          <div className="alert alert-info">
+            Table {selectedTableInfo.table_number} seats up to {selectedTableInfo.capacity} guests.
+          </div>
+        )}
+
+        <div className="field">
+          <label className="label" htmlFor="reserved_date_time">Date and time *</label>
+          <input
+            id="reserved_date_time"
+            className="input"
+            type="datetime-local"
+            name="reserved_date_time"
+            value={form.reserved_date_time}
+            onChange={(e) => setForm({ ...form, reserved_date_time: e.target.value })}
+            min={getMinDateTime()}
+            required
+          />
+          <p className="hint">Only future dates and times can be booked.</p>
+        </div>
+
+        <div className="field">
+          <label className="label" htmlFor="guest_count">Number of guests *</label>
+          <input
+            id="guest_count"
+            className="input"
+            type="number"
+            name="guest_count"
+            value={form.guest_count}
+            onChange={handleGuestCountChange}
+            min={1}
+            max={selectedTableInfo?.capacity || 20}
+            required
+          />
+          {selectedTableInfo && (
+            <p className="hint">This table seats {selectedTableInfo.capacity} at most.</p>
+          )}
+        </div>
+
+        <div className="field" style={{ marginBottom: 24 }}>
+          <label className="label" htmlFor="notes">Special requests (optional)</label>
+          <textarea
+            id="notes"
+            className="input"
+            name="notes"
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            placeholder="Allergies, a celebration, a high chair…"
+          />
+        </div>
+
+        <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={loading}>
+          {loading ? 'Submitting…' : 'Confirm reservation'}
+        </button>
+      </form>
+
+      {/* ─── MY RESERVATIONS ─── */}
+      <h2 className="section-title">My reservations</h2>
+      {reservations.length === 0 ? (
+        <div className="empty">
+          <strong>No reservations yet</strong>
+          Choose a table above to book your first one.
+        </div>
+      ) : (
+        <div className="res-list">
+          {reservations.map(res => (
+            <div key={res.id} className={`card res ${res.status}`}>
+              <div>
+                <h3 className="res-title">
+                  Table {res.table?.table_number}, {res.guest_count} guest{res.guest_count !== 1 ? 's' : ''}
+                </h3>
+                <p className="res-when">{new Date(res.reserved_date_time).toLocaleString()}</p>
+                {res.notes && <p className="res-note">“{res.notes}”</p>}
+              </div>
+              <span className={`badge ${statusBadge(res.status)}`}>{res.status}</span>
             </div>
           ))}
         </div>
-      </div>
-
-      <div style={{ padding: '24px', border: '1px solid #e2e8f0', borderRadius: '10px', marginBottom: '30px', backgroundColor: '#fafafa' }}>
-        <h3 style={{ color: '#2d3748', marginTop: 0, marginBottom: '16px' }}>Make a Reservation</h3>
-        {message && <p style={{ fontWeight: 600, color: message.startsWith('✅') ? '#166534' : '#dc2626' }}>{message}</p>}
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '14px' }}>
-            <label style={{ display: 'block', fontWeight: 500, color: '#2d3748', marginBottom: '4px' }}>Select Table:</label>
-            <select value={form.table_id} onChange={(e) => setForm({...form, table_id: e.target.value})} required style={{ width: '100%', padding: '10px', border: '1px solid #cbd5e0', borderRadius: '6px', fontSize: '15px' }}>
-              <option value="">-- Choose a table --</option>
-              {tables.filter(t => t.status === 'free').map(table => (
-                <option key={table.id} value={table.id}>Table {table.table_number} — {table.capacity} guests</option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ marginBottom: '14px' }}>
-            <label style={{ display: 'block', fontWeight: 500, color: '#2d3748', marginBottom: '4px' }}>Date & Time:</label>
-            <input type="datetime-local" value={form.reserved_date_time} onChange={(e) => setForm({...form, reserved_date_time: e.target.value})} required style={{ width: '100%', padding: '10px', border: '1px solid #cbd5e0', borderRadius: '6px', fontSize: '15px' }} />
-          </div>
-
-          <div style={{ marginBottom: '14px' }}>
-            <label style={{ display: 'block', fontWeight: 500, color: '#2d3748', marginBottom: '4px' }}>Number of Guests:</label>
-            <input type="number" min="1" value={form.guest_count} onChange={(e) => setForm({...form, guest_count: parseInt(e.target.value)})} required style={{ width: '100%', padding: '10px', border: '1px solid #cbd5e0', borderRadius: '6px', fontSize: '15px' }} />
-          </div>
-
-          <div style={{ marginBottom: '18px' }}>
-            <label style={{ display: 'block', fontWeight: 500, color: '#2d3748', marginBottom: '4px' }}>Notes (optional):</label>
-            <textarea value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #cbd5e0', borderRadius: '6px', fontSize: '15px' }} rows="3" />
-          </div>
-
-          <button type="submit" style={{ padding: '12px 24px', background: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '16px', fontWeight: 600 }}>
-            Reserve Table
-          </button>
-        </form>
-      </div>
-
-      <div>
-        <h3 style={{ color: '#2d3748', marginBottom: '16px' }}>Your Reservations</h3>
-        {reservations.length === 0 ? (
-          <p style={{ color: '#718096', fontSize: '15px' }}>You have no reservations yet.</p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {reservations.map(res => (
-              <div key={res.id} style={{
-                padding: '18px', border: '1px solid #e2e8f0', borderRadius: '8px',
-                backgroundColor: res.status === 'confirmed' ? '#fffbeb' : res.status === 'cancelled' ? '#f7fafc' : '#f0fdf4'
-              }}>
-                <p style={{ margin: '0 0 6px 0', color: '#1a202c', fontWeight: 500, fontSize: '15px' }}>
-                  <strong>Table {res.table?.table_number}</strong> — {new Date(res.reserved_date_time).toLocaleString()}
-                </p>
-                <p style={{ margin: 0, color: '#4a5568' }}>
-                  Status: <strong style={{ color: res.status === 'confirmed' ? '#92400e' : res.status === 'cancelled' ? '#718096' : '#166534' }}>
-                    {res.status === 'confirmed' ? 'Confirmed' : res.status}
-                  </strong>
-                </p>
-                {res.status === 'confirmed' && (
-                  <div style={{ marginTop: '12px', display: 'flex', gap: '10px' }}>
-                    <button onClick={() => updateReservationStatus(res.id, 'cancelled')}
-                      style={{ padding: '8px 16px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 500 }}>
-                      Cancel
-                    </button>
-                    <button onClick={() => updateReservationStatus(res.id, 'completed')}
-                      style={{ padding: '8px 16px', background: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 500 }}>
-                      Mark Completed
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

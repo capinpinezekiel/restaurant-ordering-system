@@ -7,143 +7,216 @@ export default function OrderPage({ user }) {
   const [selectedTable, setSelectedTable] = useState('');
   const [cart, setCart] = useState([]);
   const [message, setMessage] = useState('');
-
- useEffect(() => {
-  let mounted = true;  // ✅ Prevent duplicate fetch
+  const [messageType, setMessageType] = useState('info');
+  const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     try {
+      setLoading(true);
       const [menuRes, tableRes] = await Promise.all([
         api.get('/menu'),
         api.get('/tables')
       ]);
-      if (mounted) {
-        setMenu(menuRes.data);
-        setTables(tableRes.data);
-      }
+      // Handle both is_available = true and cases where field might not exist
+      setMenu(menuRes.data.filter(item => item.is_available !== false));
+      setTables(tableRes.data);
     } catch (err) {
-      console.error('Fetch error:', err);
+      console.error('Failed to load data:', err);
+      showMessage('Failed to load menu or tables', 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
-  fetchData();
-  return () => { mounted = false; };  // ✅ Cleanup
-}, []);
+  useEffect(() => {
+    fetchData();
+  }, []);
 
-
- const addToCart = (item) => {
-  setCart(prev => {
-    const exist = prev.find(c => c.menu_item_id === item.id);
-    if (exist) {
-      // ✅ Increase quantity — NO new row
-      return prev.map(c => 
-        c.menu_item_id === item.id 
-          ? {...c, quantity: c.quantity + 1} 
-          : c
-      );
-    }
-    // ✅ Only add if truly new
-    return [...prev, { 
-      menu_item_id: item.id, 
-      name: item.name, 
-      price: item.price, 
-      quantity: 1, 
-      special_requests: '' 
-    }];
-  });
-};
-
-  const removeFromCart = (id) => {
-    setCart(prev => prev.filter(c => c.menu_item_id !== id));
+  const showMessage = (text, type = 'info') => {
+    setMessage(text);
+    setMessageType(type);
+    setTimeout(() => setMessage(''), 4000);
   };
 
-  const updateQty = (id, qty) => {
-    if (qty < 1) return removeFromCart(id);
-    setCart(prev => prev.map(c => c.menu_item_id === id ? {...c, quantity: qty} : c));
+  const addToCart = (item) => {
+    setCart(prev => {
+      const exist = prev.find(c => c.menu_item_id === item.id);
+      if (exist) {
+        return prev.map(c =>
+          c.menu_item_id === item.id
+            ? { ...c, quantity: c.quantity + 1 }
+            : c
+        );
+      }
+      return [...prev, {
+        menu_item_id: item.id,
+        name: item.name,
+        price: Number(item.price),
+        quantity: 1
+      }];
+    });
   };
 
-  const total = cart.reduce((sum, c) => sum + c.price * c.quantity, 0);
+  // Immutable update — mutating the item in place made "+" count twice in dev (StrictMode)
+  const updateQuantity = (index, delta) => {
+    setCart(prev =>
+      prev
+        .map((c, i) => (i === index ? { ...c, quantity: c.quantity + delta } : c))
+        .filter(c => c.quantity > 0)
+    );
+  };
 
-  const submitOrder = async () => {
-    if (!selectedTable) return alert('Please select a table');
-    if (cart.length === 0) return alert('Cart is empty');
+  const totalAmount = cart.reduce((sum, item) => sum + (Number(item.price) * item.quantity), 0);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
     setMessage('');
+
+    if (!selectedTable) {
+      showMessage('Please select a table first', 'error');
+      return;
+    }
+    if (cart.length === 0) {
+      showMessage('Please add items to your order', 'error');
+      return;
+    }
+
     try {
       await api.post('/orders', {
         table_id: selectedTable,
-        items: cart.map(c => ({
-          menu_item_id: c.menu_item_id,
-          quantity: c.quantity,
-          special_requests: c.special_requests
-        }))
+        items: cart,
+        total_amount: totalAmount
       });
-      setMessage('✅ Order submitted! Kitchen notified.');
+
+      showMessage('Order placed. The kitchen has it.', 'success');
       setCart([]);
       setSelectedTable('');
     } catch (err) {
-      setMessage('❌ Error: ' + (err.response?.data?.message || 'Failed to place order'));
+      const errorMsg = err.response?.data?.message || 'Failed to place order';
+      showMessage(errorMsg, 'error');
     }
   };
 
+  const groupedMenu = menu.reduce((groups, item) => {
+    if (!groups[item.category]) groups[item.category] = [];
+    groups[item.category].push(item);
+    return groups;
+  }, {});
+
+  const inCart = (id) => cart.find(c => c.menu_item_id === id)?.quantity || 0;
+
   return (
-    <div style={{ padding: '20px', maxWidth: '1100px', margin: '0 auto' }}>
-      <h2>Place Order</h2>
-      {message && <p style={{ color: message.startsWith('✅') ? 'green' : 'red', fontSize: '18px' }}>{message}</p>}
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">Menu</h1>
+        <p className="page-lede">Choose a table, then add dishes to the order.</p>
+      </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
-        {/* Menu */}
-        <div>
-          <h3>Menu</h3>
-          {['Main Dish', 'Rice', 'Dessert', 'Drink'].map(cat => (
-            <div key={cat} style={{ marginBottom: '20px' }}>
-              <h4 style={{ borderBottom: '2px solid #eee', paddingBottom: '5px' }}>{cat}</h4>
-              {menu.filter(m => m.category === cat).map(item => (
-                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #eee' }}>
-                  <div>
-                    <strong>{item.name}</strong> — ₱{item.price}
-                    <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>{item.description}</p>
-                  </div>
-                  <button onClick={() => addToCart(item)} style={{ padding: '6px 12px', background: '#28a745', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Add</button>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
+      {message && (
+        <div className={`alert alert-${messageType}`} role="status">{message}</div>
+      )}
 
-        {/* Cart */}
-        <div style={{ padding: '15px', background: '#f9f9f9', borderRadius: '8px', border: '1px solid #ddd' }}>
-          <h3>Your Order</h3>
-          <div style={{ marginBottom: '15px' }}>
-            <label>Select Table:</label>
-            <select value={selectedTable} onChange={(e) => setSelectedTable(e.target.value)} style={{ width: '100%', padding: '8px', marginTop: '4px' }}>
-              <option value="">-- Choose table --</option>
-              {tables.filter(t => t.status !== 'occupied').map(t => (
-                <option key={t.id} value={t.id}>Table {t.table_number}</option>
-              ))}
-            </select>
+      {loading ? (
+        <p className="empty">Loading the menu…</p>
+      ) : (
+        <div className="order-grid">
+          {/* ─── MENU ─── */}
+          <div className="menu-card">
+            {Object.keys(groupedMenu).length === 0 ? (
+              <div className="empty" style={{ border: 0 }}>
+                <strong>The menu is empty</strong>
+                Dishes will appear here once they are available.
+              </div>
+            ) : (
+              Object.entries(groupedMenu).map(([category, items]) => (
+                <section key={category} className="menu-cat">
+                  <h2 className="menu-cat-title">{category}</h2>
+                  <div className="menu-cat-rule" />
+                  {items.map(item => (
+                    <div key={item.id} className="dish">
+                      <div className="dish-body">
+                        <div className="dish-top">
+                          <span className="dish-name">{item.name}</span>
+                          <span className="dish-leader" aria-hidden="true" />
+                          <span className="dish-price">₱{Number(item.price).toFixed(2)}</span>
+                        </div>
+                        {item.description && <p className="dish-desc">{item.description}</p>}
+                        {inCart(item.id) > 0 && (
+                          <p className="dish-count">{inCart(item.id)} in this order</p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => addToCart(item)}
+                        aria-label={`Add ${item.name} to the order`}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  ))}
+                </section>
+              ))
+            )}
           </div>
 
-          {cart.length === 0 ? <p>Cart is empty</p> : (
-            <>
-              {cart.map(c => (
-                <div key={c.menu_item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #ddd' }}>
-                  <span>{c.name}</span>
-                  <div>
-                    <button onClick={() => updateQty(c.menu_item_id, c.quantity - 1)}>-</button>
-                    <span style={{ margin: '0 8px' }}>{c.quantity}</span>
-                    <button onClick={() => updateQty(c.menu_item_id, c.quantity + 1)}>+</button>
-                    <span style={{ marginLeft: '8px', fontWeight: 'bold' }}>₱{c.price * c.quantity}</span>
+          {/* ─── ORDER TICKET ─── */}
+          <form className="ticket" onSubmit={handleSubmit}>
+            <h2 className="ticket-title">Your order</h2>
+
+            <div className="field">
+              <label className="label" htmlFor="table">Table</label>
+              <select
+                id="table"
+                className="input"
+                value={selectedTable}
+                onChange={(e) => setSelectedTable(e.target.value)}
+                required
+              >
+                <option value="">Choose a table</option>
+                {tables.map(t => (
+                  <option key={t.id} value={t.id} disabled={t.status !== 'free'}>
+                    Table {t.table_number}, seats {t.capacity}{t.status !== 'free' ? ` (${t.status})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {cart.length === 0 ? (
+              <p className="ticket-empty">Nothing here yet. Add a dish from the menu.</p>
+            ) : (
+              <div>
+                {cart.map((item, index) => (
+                  <div key={item.menu_item_id} className="line">
+                    <div>
+                      <div className="line-name">{item.name}</div>
+                      <div className="line-sub">₱{Number(item.price).toFixed(2)} each</div>
+                    </div>
+                    <div className="stepper">
+                      <button type="button" onClick={() => updateQuantity(index, -1)} aria-label={`Remove one ${item.name}`}>−</button>
+                      <span>{item.quantity}</span>
+                      <button type="button" onClick={() => updateQuantity(index, 1)} aria-label={`Add one ${item.name}`}>+</button>
+                    </div>
                   </div>
-                </div>
-              ))}
-              <h4 style={{ textAlign: 'right', marginTop: '15px' }}>Total: ₱{total}</h4>
-              <button onClick={submitOrder} style={{ width: '100%', padding: '12px', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px', fontSize: '16px', marginTop: '10px', cursor: 'pointer' }}>
-                Submit Order
-              </button>
-            </>
-          )}
+                ))}
+              </div>
+            )}
+
+            <div className="total">
+              <span style={{ fontWeight: 600 }}>Total</span>
+              <span className="total-amt">₱{totalAmount.toFixed(2)}</span>
+            </div>
+
+            <button
+              type="submit"
+              className="btn btn-primary btn-lg btn-block"
+              disabled={cart.length === 0 || !selectedTable}
+            >
+              Place order
+            </button>
+          </form>
         </div>
-      </div>
+      )}
     </div>
   );
 }
